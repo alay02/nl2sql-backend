@@ -107,8 +107,11 @@ def check_time_window_correct(question: str, sql: str) -> bool:
     if "now(" in s:
         return False
     
-    # If specific ticker is mentioned, time window should include MAX(timestamp)
-    mentioned_tickers = [t.upper() for t in SUPPORTED_TICKERS if t in q]
+    # If specific ticker is mentioned, time window should include MAX(timestamp).
+    # Match tickers as whole words so "meta" is not found inside e.g. "metadata".
+    mentioned_tickers = [
+        t.upper() for t in SUPPORTED_TICKERS if re.search(rf"\b{re.escape(t)}\b", q)
+    ]
     
     if mentioned_tickers:
         # Should use MAX(timestamp) for time windowing
