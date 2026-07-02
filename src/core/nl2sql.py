@@ -15,6 +15,7 @@ from src.constants import (
     VOLATILITY_MEASURES,
     PERFORMANCE_METRICS,
 )
+from src.core.sql_guard import guard_sql
 from src.exceptions import ClarificationNeeded, DatabaseError, SQLGenerationError
 from src.utils.db import get_db_engine
 from src.utils.llm import get_openai_client
@@ -188,7 +189,7 @@ def secure_sql(raw_sql: str) -> str:
         Secured SQL string
     """
     sql = clean_sql(raw_sql)
-    sql = enforce_select_only(sql)
+    sql = guard_sql(sql)
     sql = ensure_limit(sql)
     return sql
 
