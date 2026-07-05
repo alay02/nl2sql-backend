@@ -15,6 +15,7 @@ from src.constants import (
     VOLATILITY_MEASURES,
     PERFORMANCE_METRICS,
 )
+from src.core.sql_guard import guard_sql
 from src.exceptions import ClarificationNeeded, DatabaseError, SQLGenerationError
 from src.utils.db import get_db_engine
 from src.utils.llm import get_openai_client
@@ -188,12 +189,65 @@ def secure_sql(raw_sql: str) -> str:
         Secured SQL string
     """
     sql = clean_sql(raw_sql)
-    sql = enforce_select_only(sql)
+    sql = guard_sql(sql)
     sql = ensure_limit(sql)
     return sql
 
 
 # ==================== Clarification Detection ====================
+
+
+# Matches an explicit, quantified time window such as "30 days", "past 2 weeks",
+# "last 3 months", or "this year" - anything that pins the query to a concrete period.
+_EXPLICIT_TIME_WINDOW_RE = re.compile(
+    r"\b\d+\s*(?:day|week|month|quarter|year)s?\b"
+    r"|\b(?:last|past|previous|trailing|this)\s+(?:\d+\s+)?(?:day|week|month|quarter|year)s?\b",
+    flags=re.IGNORECASE,
+)
+
+# Single-word relative terms that fully specify a time window on their own.
+_EXPLICIT_TIME_TERMS = ("today", "yesterday")
+
+
+def has_explicit_time_window(question: str) -> bool:
+    """
+    Check whether the question already specifies a concrete time window.
+
+    Replaces a brittle hardcoded list (which only recognised exact strings like
+    "30 days" or "1 month") so natural phrasings such as "past 2 weeks" or
+    "last 3 months" are correctly recognised and not flagged as ambiguous.
+
+    Args:
+        question: Natural language question
+
+    Returns:
+        True if a concrete time window is present, False otherwise
+    """
+    q = question.lower()
+    if _EXPLICIT_TIME_WINDOW_RE.search(q):
+        return True
+    return any(term in q for term in _EXPLICIT_TIME_TERMS)
+
+
+def find_mentioned_tickers(question: str) -> list:
+    """
+    Find supported tickers mentioned as whole words in the question.
+
+    Uses word boundaries so a ticker like "meta" is not matched inside an
+    unrelated word such as "metadata".
+
+    Args:
+        question: Natural language question
+
+    Returns:
+        List of supported tickers found in the question
+    """
+    q = question.lower()
+    return [
+        ticker
+        for ticker in SUPPORTED_TICKERS
+        if re.search(rf"\b{re.escape(ticker)}\b", q)
+    ]
 
 
 def needs_clarification(question: str) -> Dict[str, Any]:
@@ -218,9 +272,7 @@ def needs_clarification(question: str) -> Dict[str, Any]:
     
     # Check for time window ambiguity
     has_time_ambiguity = any(indicator in q_lower for indicator in TIME_INDICATORS)
-    if has_time_ambiguity and not any(
-        term in q_lower for term in ["30 days", "1 month", "3 months", "6 months", "1 year"]
-    ):
+    if has_time_ambiguity and not has_explicit_time_window(question):
         missing_slots["time_window"] = (
             "Please specify a time period (e.g., 'past 30 days', 'last month')"
         )
@@ -228,7 +280,7 @@ def needs_clarification(question: str) -> Dict[str, Any]:
     # Check for comparison ambiguity
     has_comparison = any(indicator in q_lower for indicator in COMPARISON_INDICATORS)
     if has_comparison:
-        mentioned_tickers = [t for t in SUPPORTED_TICKERS if t in q_lower]
+        mentioned_tickers = find_mentioned_tickers(question)
         if len(mentioned_tickers) < 2:
             missing_slots["comparison_baseline"] = (
                 "Please specify what to compare against (e.g., 'NVDA compared to AAPL')"

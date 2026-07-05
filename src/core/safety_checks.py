@@ -4,7 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
-from src.constants import ALLOWED_TABLES, ALLOWED_COLUMNS, SUPPORTED_TICKERS, TIME_INDICATORS
+from src.constants import SUPPORTED_TICKERS, TIME_INDICATORS
+from src.core.sql_guard import is_read_only, uses_only_allowed_tables
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -15,67 +16,57 @@ logger = get_logger(__name__)
 
 def check_select_only(sql: str) -> bool:
     """
-    Verify that SQL is a SELECT or WITH query.
-    
+    Verify that SQL is a single read-only (SELECT) query.
+
+    Uses AST-based parsing so string literals or identifiers that merely
+    contain SQL keywords are not misclassified.
+
     Args:
         sql: SQL query to check
-        
+
     Returns:
-        True if query is SELECT/WITH only
+        True if query is a single read-only statement
     """
     if not sql:
         return False
-    s = sql.strip().lower()
-    return s.startswith("select") or s.startswith("with")
+    return is_read_only(sql)
 
 
 def check_no_table_modification(sql: str) -> bool:
     """
     Verify that SQL does not modify, create, or drop tables.
-    
+
+    A read-only SELECT statement cannot modify tables, so this reuses the
+    structural read-only check rather than substring keyword matching (which
+    would false-positive on e.g. a column named "deleted_at").
+
     Args:
         sql: SQL query to check
-        
+
     Returns:
         True if query does not modify tables
     """
     if not sql:
         return False
-    s = sql.lower()
-    banned = [
-        "drop ",
-        "delete ",
-        "update ",
-        "insert ",
-        "alter ",
-        "create ",
-        "truncate ",
-        "grant ",
-        "revoke ",
-    ]
-    return not any(b in s for b in banned)
+    return is_read_only(sql)
 
 
 def check_source_correct(sql: str) -> bool:
     """
     Verify that SQL only accesses allowed tables.
-    
+
+    Uses AST-based table extraction (CTE names excluded) so subqueries and
+    common table expressions are handled correctly.
+
     Args:
         sql: SQL query to check
-        
+
     Returns:
         True if query only uses allowed tables
     """
     if not sql:
         return False
-    s = sql.lower()
-    
-    # Find table names after FROM or JOIN
-    tables = re.findall(r"\b(?:from|join)\s+([a-zA-Z_][a-zA-Z0-9_]*)", s)
-    if not tables:
-        return False
-    
-    return all(t in ALLOWED_TABLES for t in tables)
+    return uses_only_allowed_tables(sql)
 
 
 def check_time_window_correct(question: str, sql: str) -> bool:
@@ -109,8 +100,11 @@ def check_time_window_correct(question: str, sql: str) -> bool:
     if "now(" in s:
         return False
     
-    # If specific ticker is mentioned, time window should include MAX(timestamp)
-    mentioned_tickers = [t.upper() for t in SUPPORTED_TICKERS if t in q]
+    # If specific ticker is mentioned, time window should include MAX(timestamp).
+    # Match tickers as whole words so "meta" is not found inside e.g. "metadata".
+    mentioned_tickers = [
+        t.upper() for t in SUPPORTED_TICKERS if re.search(rf"\b{re.escape(t)}\b", q)
+    ]
     
     if mentioned_tickers:
         # Should use MAX(timestamp) for time windowing
