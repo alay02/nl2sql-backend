@@ -20,7 +20,7 @@ TICKERS = {
     "QQQ": 500.0,
 }
 
-DAYS = 180
+DAYS = 504
 np.random.seed(42)
 
 engine = create_engine(DATABASE_URL)

@@ -5,16 +5,27 @@ from typing import Any, Dict
 from src.config import settings
 from src.constants import (
     DB_SCHEMA,
+    DB_SCHEMAS,
     DEFAULT_LIMIT,
     SQL_GENERATION_PROMPT_TEMPLATE,
+    SQL_GENERATION_PROMPT_ETFS,
+    SQL_GENERATION_PROMPT_OPTIONS,
     SQL_KEYWORDS_BANNED,
     SUPPORTED_TICKERS,
+    SUPPORTED_ETF_TICKERS,
+    SUPPORTED_OPTION_UNDERLYINGS,
     TIME_INDICATORS,
     AMBIGUOUS_KEYWORDS,
     COMPARISON_INDICATORS,
     VOLATILITY_MEASURES,
     PERFORMANCE_METRICS,
 )
+
+SQL_PROMPTS = {
+    "equities": SQL_GENERATION_PROMPT_TEMPLATE,
+    "etfs": SQL_GENERATION_PROMPT_ETFS,
+    "options": SQL_GENERATION_PROMPT_OPTIONS,
+}
 from src.core.sql_guard import guard_sql
 from src.exceptions import ClarificationNeeded, DatabaseError, SQLGenerationError
 from src.utils.db import get_db_engine
@@ -24,24 +35,27 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def generate_sql(question: str) -> str:
+def generate_sql(question: str, product_type: str = "equities") -> str:
     """
     Generate SQL from natural language question using LLM.
-    
+
     Args:
         question: Natural language question
-        
+        product_type: One of "equities", "etfs", "options"
+
     Returns:
         Generated SQL string
-        
+
     Raises:
         SQLGenerationError: If SQL generation fails
     """
     try:
         client = get_openai_client()
-        
-        prompt = SQL_GENERATION_PROMPT_TEMPLATE.format(
-            schema=DB_SCHEMA,
+
+        schema = DB_SCHEMAS.get(product_type, DB_SCHEMA)
+        prompt_template = SQL_PROMPTS.get(product_type, SQL_GENERATION_PROMPT_TEMPLATE)
+        prompt = prompt_template.format(
+            schema=schema,
             question=question,
             limit=DEFAULT_LIMIT,
         )
@@ -250,12 +264,13 @@ def find_mentioned_tickers(question: str) -> list:
     ]
 
 
-def needs_clarification(question: str) -> Dict[str, Any]:
+def needs_clarification(question: str, product_type: str = "equities") -> Dict[str, Any]:
     """
     Check if the question needs clarification before SQL generation.
-    
+
     Args:
         question: Natural language question
+        product_type: Product type — used to skip inapplicable checks
         
     Returns:
         Dict with 'needs_clarify' bool and 'missing_slots' if clarification needed
@@ -286,10 +301,10 @@ def needs_clarification(question: str) -> Dict[str, Any]:
                 "Please specify what to compare against (e.g., 'NVDA compared to AAPL')"
             )
     
-    # Check for volatility ambiguity
-    if "volatility" in q_lower and not any(
+    # Check for volatility ambiguity (skip for options — IV is a concrete column)
+    if "volatility" in q_lower and product_type != "options" and not any(
         measure in q_lower for measure in VOLATILITY_MEASURES
-    ):
+    ) and "implied" not in q_lower:
         missing_slots["volatility_measure"] = (
             "Please specify how to measure volatility "
             "(e.g., 'standard deviation of returns', 'price range')"
@@ -312,23 +327,16 @@ def needs_clarification(question: str) -> Dict[str, Any]:
 # ==================== Main Query Processing ====================
 
 
-def eval_one(question: str) -> Dict[str, Any]:
+def eval_one(question: str, product_type: str = "equities") -> Dict[str, Any]:
     """
     Process a question through the entire NL2SQL pipeline.
-    
+
     Args:
         question: Natural language question from user
-        
+        product_type: One of "equities", "etfs", "options"
+
     Returns:
         Dict with status, SQL, data, and metadata
-        
-    Response structure:
-        - status: "ok" | "no_data" | "error" | "clarify"
-        - sql: Generated SQL (None for clarify/error)
-        - data: Query results (None for clarify/error)
-        - missing_slots: For clarify status
-        - message: Error or info message
-        - meta: Query metadata
     """
     if not question or not question.strip():
         logger.warning("Received empty question")
@@ -338,12 +346,12 @@ def eval_one(question: str) -> Dict[str, Any]:
             "data": None,
             "message": "Question cannot be empty",
         }
-    
+
     question = question.strip()
-    logger.info(f"Processing question: {question}")
-    
+    logger.info(f"Processing question ({product_type}): {question}")
+
     # Check if clarification is needed first
-    clarify_check = needs_clarification(question)
+    clarify_check = needs_clarification(question, product_type=product_type)
     if clarify_check["needs_clarify"]:
         logger.info("Question needs clarification")
         return {
@@ -351,10 +359,10 @@ def eval_one(question: str) -> Dict[str, Any]:
             "missing_slots": clarify_check["missing_slots"],
             "message": "The question needs clarification to generate an accurate query.",
         }
-    
+
     try:
-        # Generate SQL
-        raw_sql = generate_sql(question)
+        # Generate SQL using the product-specific prompt and schema
+        raw_sql = generate_sql(question, product_type=product_type)
         sql = secure_sql(raw_sql)
         
         # 1.2 Optimization: Validate and correct SQL

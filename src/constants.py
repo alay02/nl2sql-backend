@@ -1,7 +1,7 @@
 """Application constants and configurations"""
 
-# ==================== Database Schema ====================
-DB_SCHEMA = """
+# ==================== Database Schemas ====================
+DB_SCHEMA_EQUITIES = """
 Table: market_data
 Columns:
 - ticker (TEXT)
@@ -13,12 +13,61 @@ Columns:
 - volume (BIGINT)
 """
 
+DB_SCHEMA_ETFS = """
+Table: etf_data
+Columns:
+- ticker (TEXT)
+- timestamp (TIMESTAMPTZ)
+- open (DOUBLE)
+- high (DOUBLE)
+- low (DOUBLE)
+- close (DOUBLE)
+- volume (BIGINT)
+- nav (DOUBLE) -- net asset value
+- expense_ratio (DOUBLE) -- annual expense ratio as percentage (e.g. 0.03 = 0.03%)
+- aum (DOUBLE) -- assets under management in USD
+"""
+
+DB_SCHEMA_OPTIONS = """
+Table: options_data
+Columns:
+- underlying_ticker (TEXT) -- the stock ticker this option is based on
+- timestamp (TIMESTAMPTZ)
+- expiration (DATE) -- option expiration date
+- strike (DOUBLE) -- strike price
+- option_type (TEXT) -- 'call' or 'put'
+- bid (DOUBLE)
+- ask (DOUBLE)
+- last_price (DOUBLE)
+- volume (BIGINT)
+- open_interest (BIGINT)
+- implied_volatility (DOUBLE) -- IV as a decimal (e.g. 0.30 = 30%)
+- delta (DOUBLE) -- option delta; positive for calls, negative for puts
+"""
+
+# Combined schema dict keyed by product type
+DB_SCHEMAS = {
+    "equities": DB_SCHEMA_EQUITIES,
+    "etfs": DB_SCHEMA_ETFS,
+    "options": DB_SCHEMA_OPTIONS,
+}
+
+# Default schema (backwards compatible)
+DB_SCHEMA = DB_SCHEMA_EQUITIES
+
 # ==================== Allowed Resources ====================
-ALLOWED_TABLES = {"market_data"}
-ALLOWED_COLUMNS = {"ticker", "timestamp", "open", "high", "low", "close", "volume"}
+ALLOWED_TABLES = {"market_data", "etf_data", "options_data"}
+ALLOWED_COLUMNS = {
+    "ticker", "timestamp", "open", "high", "low", "close", "volume",
+    "nav", "expense_ratio", "aum",
+    "underlying_ticker", "expiration", "strike", "option_type",
+    "bid", "ask", "last_price", "open_interest", "implied_volatility", "delta",
+}
 
 # ==================== Supported Data ====================
 SUPPORTED_TICKERS = ["nvda", "aapl", "tsla", "msft", "amzn", "googl", "meta", "spy", "qqq"]
+SUPPORTED_ETF_TICKERS = ["voo", "qqq", "iwm", "xlf", "xlk", "gld", "tlt", "vti", "arkk"]
+SUPPORTED_OPTION_UNDERLYINGS = ["nvda", "aapl", "tsla", "msft", "amzn"]
 
 # ==================== Clarification Keywords ====================
 AMBIGUOUS_KEYWORDS = [
@@ -434,3 +483,199 @@ FINAL ANSWER
 
 Generate a clear, factual, and data-grounded answer.
 """
+
+# ==================== ETF SQL Generation Prompt ====================
+SQL_GENERATION_PROMPT_ETFS = """
+You are a PostgreSQL expert. Generate SQL for ETF (Exchange-Traded Fund) data queries.
+
+STEP 1: ANALYZE THE QUESTION
+- Identify the ETF tickers involved
+- Identify the metrics requested (price, NAV, expense ratio, AUM, volume, etc.)
+- Identify the time period
+- Identify any aggregations or comparisons needed
+
+STEP 2: CONSTRUCT THE SQL
+Apply these rules STRICTLY:
+- Do NOT include markdown code fences
+- Do NOT include explanations or comments
+- Use double quotes around column names like "timestamp"
+- Only query from table etf_data
+- Always add LIMIT {limit} for non-aggregation queries
+
+TIME WINDOW RULES:
+- Never use NOW() — always use MAX("timestamp") for historical data
+
+ETF-SPECIFIC CALCULATION RULES:
+- NAV premium/discount = (close - nav) / nav * 100 (positive = premium, negative = discount)
+- Tracking error vs NAV = STDDEV(close - nav) over a period
+- Expense-adjusted return: factor in expense_ratio when comparing ETFs
+- AUM is stored in USD (not billions) — format display accordingly
+- expense_ratio is a percentage stored as decimal (0.03 = 0.03%)
+
+REFERENCE EXAMPLES:
+
+--- BASIC RETRIEVAL ---
+Example 1:
+  Q: "Show the latest 10 rows for VOO."
+  SQL: SELECT * FROM etf_data WHERE ticker = 'VOO' ORDER BY "timestamp" DESC LIMIT 10;
+
+Example 2:
+  Q: "What is VOO's current NAV?"
+  SQL: SELECT "timestamp", close, nav FROM etf_data WHERE ticker = 'VOO' ORDER BY "timestamp" DESC LIMIT 1;
+
+Example 3:
+  Q: "Show all ETFs in the database."
+  SQL: SELECT DISTINCT ticker FROM etf_data ORDER BY ticker;
+
+--- EXPENSE AND AUM ---
+Example 4:
+  Q: "What is the expense ratio of each ETF?"
+  SQL: SELECT DISTINCT ticker, expense_ratio FROM etf_data ORDER BY expense_ratio ASC;
+
+Example 5:
+  Q: "Which ETF has the largest AUM?"
+  SQL: SELECT ticker, aum FROM etf_data WHERE "timestamp" = (SELECT MAX("timestamp") FROM etf_data) ORDER BY aum DESC LIMIT 1;
+
+Example 6:
+  Q: "Compare expense ratios of VOO and QQQ."
+  SQL: SELECT DISTINCT ticker, expense_ratio FROM etf_data WHERE ticker IN ('VOO', 'QQQ') ORDER BY ticker;
+
+--- NAV ANALYSIS ---
+Example 7:
+  Q: "Is VOO trading at a premium or discount to NAV?"
+  SQL: SELECT "timestamp", close, nav, ROUND(((close - nav) / nav * 100)::numeric, 4) AS premium_discount_pct FROM etf_data WHERE ticker = 'VOO' ORDER BY "timestamp" DESC LIMIT 1;
+
+Example 8:
+  Q: "Show GLD's NAV premium/discount over the last 30 days."
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM etf_data WHERE ticker = 'GLD') SELECT "timestamp", close, nav, ROUND(((close - nav) / nav * 100)::numeric, 4) AS premium_discount_pct FROM etf_data WHERE ticker = 'GLD' AND "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '30 days' ORDER BY "timestamp" ASC LIMIT 200;
+
+--- PRICE AND RETURN ---
+Example 9:
+  Q: "What is the average close of QQQ over the last 7 days?"
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM etf_data WHERE ticker = 'QQQ') SELECT AVG(close) AS avg_close FROM etf_data WHERE ticker = 'QQQ' AND "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '7 days';
+
+Example 10:
+  Q: "Compare the cumulative return of VOO and ARKK over the last 60 days."
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM etf_data WHERE ticker IN ('VOO', 'ARKK')), period AS (SELECT * FROM etf_data WHERE ticker IN ('VOO', 'ARKK') AND "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '60 days'), firsts AS (SELECT DISTINCT ON (ticker) ticker, close AS first_close FROM period ORDER BY ticker, "timestamp" ASC), lasts AS (SELECT DISTINCT ON (ticker) ticker, close AS last_close FROM period ORDER BY ticker, "timestamp" DESC) SELECT f.ticker, ROUND(((l.last_close - f.first_close) / f.first_close * 100)::numeric, 4) AS cumulative_return_pct FROM firsts f JOIN lasts l ON f.ticker = l.ticker ORDER BY cumulative_return_pct DESC;
+
+Example 11:
+  Q: "Which ETF had the highest volume in the last week?"
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM etf_data) SELECT ticker, SUM(volume) AS total_volume FROM etf_data WHERE "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '7 days' GROUP BY ticker ORDER BY total_volume DESC LIMIT 1;
+
+Example 12:
+  Q: "What is the volatility of TLT over the last 30 days?"
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM etf_data WHERE ticker = 'TLT'), daily AS (SELECT "timestamp", close, LAG(close) OVER (ORDER BY "timestamp") AS prev_close FROM etf_data WHERE ticker = 'TLT') SELECT ROUND(STDDEV((close - prev_close) / prev_close)::numeric, 6) AS daily_return_volatility FROM daily WHERE prev_close IS NOT NULL AND "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '30 days';
+
+BAD EXAMPLES (patterns to AVOID):
+- NEVER use NOW() — always use MAX("timestamp") for time anchoring.
+- NEVER query from market_data — ETF data is in etf_data.
+- NEVER omit LIMIT on non-aggregation SELECT queries.
+
+Schema:
+{schema}
+
+User question:
+{question}
+
+Remember: Output ONLY the SQL statement, nothing else."""
+
+
+# ==================== Options SQL Generation Prompt ====================
+SQL_GENERATION_PROMPT_OPTIONS = """
+You are a PostgreSQL expert. Generate SQL for options contract data queries.
+
+STEP 1: ANALYZE THE QUESTION
+- Identify the underlying ticker(s)
+- Identify if asking about calls, puts, or both
+- Identify strike price, expiration, or other filters
+- Identify the metric (premium, IV, delta, volume, open interest, etc.)
+
+STEP 2: CONSTRUCT THE SQL
+Apply these rules STRICTLY:
+- Do NOT include markdown code fences
+- Do NOT include explanations or comments
+- Use double quotes around column names like "timestamp"
+- Only query from table options_data
+- Always add LIMIT {limit} for non-aggregation queries
+- The column for the stock is "underlying_ticker" (not "ticker")
+- option_type values are 'call' and 'put' (lowercase)
+
+OPTIONS-SPECIFIC RULES:
+- Mid price = (bid + ask) / 2
+- Spread = ask - bid
+- Spread percentage = (ask - bid) / ((ask + bid) / 2) * 100
+- IV is stored as a decimal (0.30 = 30%)
+- Delta is positive for calls (0 to 1), negative for puts (-1 to 0)
+- Days to expiration = expiration - "timestamp"::date
+- Moneyness: ITM call = strike < close, OTM call = strike > close (reverse for puts)
+- For "options chain", show all strikes for a given underlying, expiration, and date
+
+REFERENCE EXAMPLES:
+
+--- OPTIONS CHAIN ---
+Example 1:
+  Q: "Show the options chain for NVDA calls expiring soonest."
+  SQL: WITH latest AS (SELECT MAX("timestamp") AS max_ts FROM options_data WHERE underlying_ticker = 'NVDA'), nearest_exp AS (SELECT MIN(expiration) AS exp FROM options_data WHERE underlying_ticker = 'NVDA' AND expiration > (SELECT max_ts::date FROM latest)) SELECT underlying_ticker, expiration, strike, option_type, bid, ask, last_price, volume, open_interest, implied_volatility, delta FROM options_data WHERE underlying_ticker = 'NVDA' AND option_type = 'call' AND expiration = (SELECT exp FROM nearest_exp) AND "timestamp" = (SELECT max_ts FROM latest) ORDER BY strike ASC LIMIT 200;
+
+Example 2:
+  Q: "Show all put options for AAPL with strike below 220."
+  SQL: SELECT underlying_ticker, expiration, strike, bid, ask, last_price, implied_volatility, delta, open_interest FROM options_data WHERE underlying_ticker = 'AAPL' AND option_type = 'put' AND strike < 220 AND "timestamp" = (SELECT MAX("timestamp") FROM options_data WHERE underlying_ticker = 'AAPL') ORDER BY expiration, strike LIMIT 200;
+
+--- IMPLIED VOLATILITY ---
+Example 3:
+  Q: "What is the average implied volatility for NVDA calls?"
+  SQL: SELECT ROUND(AVG(implied_volatility)::numeric, 4) AS avg_iv FROM options_data WHERE underlying_ticker = 'NVDA' AND option_type = 'call' AND "timestamp" = (SELECT MAX("timestamp") FROM options_data WHERE underlying_ticker = 'NVDA');
+
+Example 4:
+  Q: "Compare the IV of TSLA calls vs puts."
+  SQL: SELECT option_type, ROUND(AVG(implied_volatility)::numeric, 4) AS avg_iv FROM options_data WHERE underlying_ticker = 'TSLA' AND "timestamp" = (SELECT MAX("timestamp") FROM options_data WHERE underlying_ticker = 'TSLA') GROUP BY option_type ORDER BY option_type;
+
+Example 5:
+  Q: "Which underlying has the highest average IV?"
+  SQL: SELECT underlying_ticker, ROUND(AVG(implied_volatility)::numeric, 4) AS avg_iv FROM options_data WHERE "timestamp" = (SELECT MAX("timestamp") FROM options_data) GROUP BY underlying_ticker ORDER BY avg_iv DESC LIMIT 1;
+
+Example 6:
+  Q: "Show how NVDA's average call IV has changed over the last 30 days."
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM options_data WHERE underlying_ticker = 'NVDA') SELECT "timestamp", ROUND(AVG(implied_volatility)::numeric, 4) AS avg_call_iv FROM options_data WHERE underlying_ticker = 'NVDA' AND option_type = 'call' AND "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '30 days' GROUP BY "timestamp" ORDER BY "timestamp" ASC LIMIT 200;
+
+--- GREEKS ---
+Example 7:
+  Q: "Show AAPL calls with delta above 0.7."
+  SQL: SELECT underlying_ticker, expiration, strike, last_price, delta, implied_volatility FROM options_data WHERE underlying_ticker = 'AAPL' AND option_type = 'call' AND delta > 0.7 AND "timestamp" = (SELECT MAX("timestamp") FROM options_data WHERE underlying_ticker = 'AAPL') ORDER BY delta DESC LIMIT 200;
+
+Example 8:
+  Q: "Find the ATM (at-the-money) options for MSFT."
+  SQL: WITH latest AS (SELECT MAX("timestamp") AS max_ts FROM options_data WHERE underlying_ticker = 'MSFT'), spot AS (SELECT strike FROM options_data WHERE underlying_ticker = 'MSFT' AND option_type = 'call' AND "timestamp" = (SELECT max_ts FROM latest) ORDER BY ABS(delta - 0.5) ASC LIMIT 1) SELECT expiration, strike, option_type, bid, ask, last_price, implied_volatility, delta FROM options_data WHERE underlying_ticker = 'MSFT' AND strike = (SELECT strike FROM spot) AND "timestamp" = (SELECT max_ts FROM latest) ORDER BY expiration, option_type LIMIT 200;
+
+--- VOLUME AND OPEN INTEREST ---
+Example 9:
+  Q: "What are the most actively traded NVDA options?"
+  SQL: SELECT underlying_ticker, expiration, strike, option_type, volume, open_interest, last_price FROM options_data WHERE underlying_ticker = 'NVDA' AND "timestamp" = (SELECT MAX("timestamp") FROM options_data WHERE underlying_ticker = 'NVDA') ORDER BY volume DESC LIMIT 10;
+
+Example 10:
+  Q: "Show the put/call volume ratio for TSLA."
+  SQL: WITH latest AS (SELECT MAX("timestamp") AS max_ts FROM options_data WHERE underlying_ticker = 'TSLA'), volumes AS (SELECT option_type, SUM(volume) AS total_vol FROM options_data WHERE underlying_ticker = 'TSLA' AND "timestamp" = (SELECT max_ts FROM latest) GROUP BY option_type) SELECT p.total_vol AS put_volume, c.total_vol AS call_volume, ROUND((p.total_vol::numeric / NULLIF(c.total_vol, 0))::numeric, 4) AS put_call_ratio FROM volumes p, volumes c WHERE p.option_type = 'put' AND c.option_type = 'call';
+
+--- SPREADS AND PRICING ---
+Example 11:
+  Q: "Show the bid-ask spread for AMZN calls expiring next week."
+  SQL: WITH latest AS (SELECT MAX("timestamp") AS max_ts FROM options_data WHERE underlying_ticker = 'AMZN'), nearest_exp AS (SELECT MIN(expiration) AS exp FROM options_data WHERE underlying_ticker = 'AMZN' AND expiration > (SELECT max_ts::date FROM latest)) SELECT strike, bid, ask, ROUND((ask - bid)::numeric, 2) AS spread, ROUND(((ask - bid) / ((ask + bid) / 2) * 100)::numeric, 2) AS spread_pct FROM options_data WHERE underlying_ticker = 'AMZN' AND option_type = 'call' AND expiration = (SELECT exp FROM nearest_exp) AND "timestamp" = (SELECT max_ts FROM latest) ORDER BY strike ASC LIMIT 200;
+
+Example 12:
+  Q: "What is the total open interest across all NVDA options?"
+  SQL: SELECT SUM(open_interest) AS total_oi FROM options_data WHERE underlying_ticker = 'NVDA' AND "timestamp" = (SELECT MAX("timestamp") FROM options_data WHERE underlying_ticker = 'NVDA');
+
+BAD EXAMPLES (patterns to AVOID):
+- NEVER use NOW() — always use MAX("timestamp") for time anchoring.
+- NEVER query from market_data or etf_data — options data is in options_data.
+- NEVER use "ticker" — the column is "underlying_ticker".
+- NEVER treat IV as a percentage in filters (0.30 means 30%, not 0.30%).
+- NEVER omit LIMIT on non-aggregation SELECT queries.
+
+Schema:
+{schema}
+
+User question:
+{question}
+
+Remember: Output ONLY the SQL statement, nothing else."""
