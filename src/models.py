@@ -13,9 +13,17 @@ class StatusEnum(str, Enum):
     CLARIFY = "clarify"
 
 
+class ProductTypeEnum(str, Enum):
+    """Supported product types"""
+    EQUITIES = "equities"
+    ETFS = "etfs"
+    OPTIONS = "options"
+
+
 class QueryRequest(BaseModel):
     """API request model"""
     question: str = Field(..., min_length=1, max_length=500)
+    product_type: ProductTypeEnum = Field(default=ProductTypeEnum.EQUITIES)
 
 
 class SqlGenerationChecks(BaseModel):

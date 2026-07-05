@@ -1,4 +1,8 @@
 """LLM client management"""
+from __future__ import annotations
+
+from typing import Optional
+
 from openai import OpenAI
 
 from src.config import settings
@@ -6,7 +10,7 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_openai_client: OpenAI | None = None
+_openai_client: Optional[OpenAI] = None
 
 
 def get_openai_client() -> OpenAI:

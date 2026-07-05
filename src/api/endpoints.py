@@ -26,10 +26,11 @@ async def query(req: QueryRequest) -> QueryResponse:
     Process a natural language question through the NL2SQL pipeline.
     """
     try:
-        logger.info(f"Processing query: {req.question}")
+        product_type = req.product_type.value
+        logger.info(f"Processing query ({product_type}): {req.question}")
 
         # Step 1: Generate and execute SQL
-        sql_result = eval_one(req.question)
+        sql_result = eval_one(req.question, product_type=product_type)
 
         # Step 2: Generate natural-language answer
         result = summarize_answer(req.question, sql_result)

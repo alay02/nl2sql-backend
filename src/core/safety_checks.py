@@ -1,6 +1,8 @@
 """SQL safety validation and security checks"""
+from __future__ import annotations
+
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from src.constants import SUPPORTED_TICKERS, TIME_INDICATORS
 from src.core.sql_guard import is_read_only, uses_only_allowed_tables
@@ -170,7 +172,7 @@ def check_connection_stable(exec_status: str, error_message: str = "") -> bool:
 
 def build_safety_checks(
     question: str,
-    sql: str | None,
+    sql: Optional[str],
     status: str,
     message: str = "",
 ) -> Dict[str, Any]:
