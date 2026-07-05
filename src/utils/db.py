@@ -1,4 +1,8 @@
 """Database connection management"""
+from __future__ import annotations
+
+from typing import Optional
+
 from sqlalchemy import create_engine, Engine
 
 from src.config import settings
@@ -6,7 +10,7 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_engine: Engine | None = None
+_engine: Optional[Engine] = None
 
 
 def get_db_engine() -> Engine:
