@@ -45,29 +45,47 @@ Columns:
 - delta (DOUBLE) -- option delta; positive for calls, negative for puts
 """
 
+DB_SCHEMA_CRYPTO = """
+Table: crypto_data
+Columns:
+- ticker (TEXT)
+- asset_name (TEXT)
+- timestamp (TIMESTAMPTZ)
+- open (DOUBLE)
+- high (DOUBLE)
+- low (DOUBLE)
+- close (DOUBLE)
+- volume (BIGINT)
+"""
+
+
+
 # Combined schema dict keyed by product type
 DB_SCHEMAS = {
     "equities": DB_SCHEMA_EQUITIES,
     "etfs": DB_SCHEMA_ETFS,
     "options": DB_SCHEMA_OPTIONS,
+    "crypto": DB_SCHEMA_CRYPTO,
 }
 
 # Default schema (backwards compatible)
 DB_SCHEMA = DB_SCHEMA_EQUITIES
 
 # ==================== Allowed Resources ====================
-ALLOWED_TABLES = {"market_data", "etf_data", "options_data"}
+ALLOWED_TABLES = {"market_data", "etf_data", "options_data", "crypto_data"}
 ALLOWED_COLUMNS = {
     "ticker", "timestamp", "open", "high", "low", "close", "volume",
     "nav", "expense_ratio", "aum",
     "underlying_ticker", "expiration", "strike", "option_type",
     "bid", "ask", "last_price", "open_interest", "implied_volatility", "delta",
+    "asset_name",
 }
 
 # ==================== Supported Data ====================
 SUPPORTED_TICKERS = ["nvda", "aapl", "tsla", "msft", "amzn", "googl", "meta", "spy", "qqq"]
 SUPPORTED_ETF_TICKERS = ["voo", "qqq", "iwm", "xlf", "xlk", "gld", "tlt", "vti", "arkk"]
 SUPPORTED_OPTION_UNDERLYINGS = ["nvda", "aapl", "tsla", "msft", "amzn"]
+SUPPORTED_CRYPTO_TICKERS = ["btc", "eth", "bnb", "sol", "xrp", "doge"]
 
 # ==================== Clarification Keywords ====================
 AMBIGUOUS_KEYWORDS = [
@@ -670,6 +688,78 @@ BAD EXAMPLES (patterns to AVOID):
 - NEVER query from market_data or etf_data — options data is in options_data.
 - NEVER use "ticker" — the column is "underlying_ticker".
 - NEVER treat IV as a percentage in filters (0.30 means 30%, not 0.30%).
+- NEVER omit LIMIT on non-aggregation SELECT queries.
+
+Schema:
+{schema}
+
+User question:
+{question}
+
+Remember: Output ONLY the SQL statement, nothing else."""
+
+# ==================== Crypto SQL Generation Prompt ====================
+SQL_GENERATION_PROMPT_CRYPTO = """
+You are a PostgreSQL expert. Generate SQL for cryptocurrency market data queries.
+
+STEP 1: ANALYZE THE QUESTION
+- Identify the crypto tickers involved (e.g. BTC, ETH)
+- Identify the metrics requested (price, volume, volatility, etc.)
+- Identify the time period
+- Identify any aggregations or comparisons needed
+
+STEP 2: CONSTRUCT THE SQL
+Apply these rules STRICTLY:
+- Do NOT include markdown code fences
+- Do NOT include explanations or comments
+- Use double quotes around column names like "timestamp"
+- Only query from table crypto_data
+- Always add LIMIT {limit} for non-aggregation queries
+
+TIME WINDOW RULES:
+- Never use NOW() — always use MAX("timestamp") for historical data
+- Crypto trades 24/7, so there are no "trading day" gaps like equities
+
+CRYPTO-SPECIFIC CALCULATION RULES:
+- Daily return = (close - previous_close) / previous_close, via LAG(close) OVER (PARTITION BY ticker ORDER BY "timestamp")
+- Volatility = STDDEV(daily_return) over a period
+- VWAP = SUM(close * volume) / SUM(volume)
+
+REFERENCE EXAMPLES:
+
+--- BASIC RETRIEVAL ---
+Example 1:
+  Q: "Show the latest 10 rows for BTC."
+  SQL: SELECT * FROM crypto_data WHERE ticker = 'BTC' ORDER BY "timestamp" DESC LIMIT 10;
+
+Example 2:
+  Q: "What was ETH's most recent closing price?"
+  SQL: SELECT close FROM crypto_data WHERE ticker = 'ETH' ORDER BY "timestamp" DESC LIMIT 1;
+
+Example 3:
+  Q: "Show all cryptocurrencies in the database."
+  SQL: SELECT DISTINCT ticker, asset_name FROM crypto_data ORDER BY ticker;
+
+--- AGGREGATION ---
+Example 4:
+  Q: "What is the average closing price of BTC over the last 7 days?"
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM crypto_data WHERE ticker = 'BTC') SELECT AVG(close) AS avg_close FROM crypto_data WHERE ticker = 'BTC' AND "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '7 days';
+
+Example 5:
+  Q: "Compare the cumulative return of BTC and ETH over the last 30 days."
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM crypto_data WHERE ticker IN ('BTC', 'ETH')), period AS (SELECT * FROM crypto_data WHERE ticker IN ('BTC', 'ETH') AND "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '30 days'), firsts AS (SELECT DISTINCT ON (ticker) ticker, close AS first_close FROM period ORDER BY ticker, "timestamp" ASC), lasts AS (SELECT DISTINCT ON (ticker) ticker, close AS last_close FROM period ORDER BY ticker, "timestamp" DESC) SELECT f.ticker, ROUND(((l.last_close - f.first_close) / f.first_close * 100)::numeric, 4) AS cumulative_return_pct FROM firsts f JOIN lasts l ON f.ticker = l.ticker ORDER BY cumulative_return_pct DESC;
+
+Example 6:
+  Q: "What is the volatility of BTC over the last 30 days?"
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM crypto_data WHERE ticker = 'BTC'), daily AS (SELECT "timestamp", close, LAG(close) OVER (ORDER BY "timestamp") AS prev_close FROM crypto_data WHERE ticker = 'BTC') SELECT ROUND(STDDEV((close - prev_close) / prev_close)::numeric, 6) AS daily_return_volatility FROM daily WHERE prev_close IS NOT NULL AND "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '30 days';
+
+Example 7:
+  Q: "Which crypto had the highest trading volume in the last week?"
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM crypto_data) SELECT ticker, SUM(volume) AS total_volume FROM crypto_data WHERE "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '7 days' GROUP BY ticker ORDER BY total_volume DESC LIMIT 1;
+
+BAD EXAMPLES (patterns to AVOID):
+- NEVER use NOW() — always use MAX("timestamp") for time anchoring.
+- NEVER query from market_data, etf_data, or options_data — crypto data is in crypto_data.
 - NEVER omit LIMIT on non-aggregation SELECT queries.
 
 Schema:
