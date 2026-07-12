@@ -32,6 +32,11 @@ class Settings:
     
     # CORS settings
     CORS_ORIGINS: list = ["*"]
+
+    # Local development identity (simulates a logged-in user until real auth exists)
+    APP_USER_ID: str = os.environ.get("APP_USER_ID", "local-user")
+    APP_USER_NAME: str = os.environ.get("APP_USER_NAME", "Local User")
+    APP_USER_ROLE: str = os.environ.get("APP_USER_ROLE", "analyst")
     
     @classmethod
     def validate(cls) -> None:
