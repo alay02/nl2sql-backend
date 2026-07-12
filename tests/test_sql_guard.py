@@ -18,7 +18,7 @@ from src.core.sql_guard import (  # noqa: E402
     is_read_only,
     uses_only_allowed_tables,
 )
-from src.exceptions import SQLGenerationError  # noqa: E402
+from src.exceptions import SQLGenerationError, SQLSafetyBlockedError  # noqa: E402
 
 
 # ---------- queries that must be ALLOWED ----------
@@ -64,7 +64,7 @@ class TestRejected:
         "GRANT SELECT ON market_data TO bob",
     ])
     def test_non_select_statements_rejected(self, sql):
-        with pytest.raises(SQLGenerationError):
+        with pytest.raises(SQLSafetyBlockedError):
             guard_sql(sql)
 
     def test_multiple_statements_rejected(self):
@@ -72,7 +72,7 @@ class TestRejected:
             guard_sql("SELECT close FROM market_data; DROP TABLE market_data")
 
     def test_disallowed_table_rejected(self):
-        with pytest.raises(SQLGenerationError):
+        with pytest.raises(SQLSafetyBlockedError):
             guard_sql("SELECT * FROM users JOIN market_data USING (id)")
 
     def test_unparseable_sql_rejected(self):
