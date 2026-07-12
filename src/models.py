@@ -11,6 +11,7 @@ class StatusEnum(str, Enum):
     NO_DATA = "no_data"
     ERROR = "error"
     CLARIFY = "clarify"
+    BLOCKED = "blocked"
 
 
 class ProductTypeEnum(str, Enum):
