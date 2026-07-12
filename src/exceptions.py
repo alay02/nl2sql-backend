@@ -29,3 +29,8 @@ class ConfigurationError(NL2SQLException):
 class LLMError(NL2SQLException):
     """Raised when LLM call fails"""
     pass
+
+class SQLSafetyBlockedError(NL2SQLException):
+    """Raised when SQL is rejected by safety rules (unsafe statement type,
+    disallowed table, or stacked/multiple statements)."""
+    pass
