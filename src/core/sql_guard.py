@@ -14,7 +14,7 @@ import sqlglot
 from sqlglot import exp
 
 from src.constants import ALLOWED_TABLES
-from src.exceptions import SQLGenerationError
+from src.exceptions import SQLGenerationError, SQLSafetyBlockedError
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -94,19 +94,22 @@ def guard_sql(sql: str, allowed_tables=ALLOWED_TABLES) -> str:
         The ``sql`` unchanged if it passes every check
 
     Raises:
-        SQLGenerationError: if the SQL is unparseable, not a single statement,
-            not read-only, or references a table outside the allow-list
+        SQLGenerationError: if the SQL is unparseable or not a single statement
+            (a generation/formatting issue, not a security concern).
+        SQLSafetyBlockedError: if the SQL is parseable but violates a safety
+            rule — it is not read-only, or it references a table outside the
+            allow-list.
     """
     statement = _parse_single(sql)
 
     if not isinstance(statement, _READ_ONLY_ROOTS):
         kind = type(statement).__name__.upper()
-        raise SQLGenerationError(f"Rejected: only SELECT queries are allowed (got {kind}).")
+        raise SQLSafetyBlockedError(f"Rejected: only SELECT queries are allowed (got {kind}).")
 
     allowed = {t.lower() for t in allowed_tables}
     disallowed = sorted(_referenced_tables(statement) - allowed)
     if disallowed:
-        raise SQLGenerationError(
+        raise SQLSafetyBlockedError(
             f"Rejected: query references table(s) not in the allow-list: {disallowed}."
         )
 
