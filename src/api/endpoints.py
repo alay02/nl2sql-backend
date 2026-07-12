@@ -24,18 +24,29 @@ async def health_check():
 async def query(req: QueryRequest) -> QueryResponse:
     """
     Process a natural language question through the NL2SQL pipeline.
+
+    `failed_stage` here tracks which post-pipeline step was executing if an
+    *unexpected* exception occurs (a bug, not a normal business outcome —
+    normal business failures are already returned by eval_one() as
+    status="error"/"blocked" with their own failed_stage, with a 200
+    response). This is only for the "something we didn't anticipate broke"
+    case, so the log line tells us exactly where instead of a bare 500.
     """
+    product_type = req.product_type.value
+    logger.info(f"Processing query ({product_type}): {req.question}")
+
+    failed_stage = "sql_pipeline"
+
     try:
-        product_type = req.product_type.value
-        logger.info(f"Processing query ({product_type}): {req.question}")
+        # Stage: sql_generation / safety_validation / sql_execution
+        # (already handled inside eval_one; this only catches an
+        # unanticipated exception type slipping through it)
+        result = eval_one(req.question, product_type=product_type)
 
-        # Step 1: Generate and execute SQL
-        sql_result = eval_one(req.question, product_type=product_type)
+        failed_stage = "answer_generation"
+        result = summarize_answer(req.question, result)
 
-        # Step 2: Generate natural-language answer
-        result = summarize_answer(req.question, sql_result)
-
-        # Step 3: Build existing SQL / execution safety checks
+        failed_stage = "safety_checks_build"
         result["safety_checks"] = build_safety_checks(
             question=req.question,
             sql=result.get("sql"),
@@ -43,8 +54,8 @@ async def query(req: QueryRequest) -> QueryResponse:
             message=result.get("message", ""),
         )
 
-        # Step 4: Validate whether final_answer is grounded in SQL result
         if result.get("status") == "ok":
+            failed_stage = "answer_grounding"
             answer_validation = validate_answer_grounding(
                 sql=result.get("sql", ""),
                 data=result.get("data", {}),
@@ -54,6 +65,7 @@ async def query(req: QueryRequest) -> QueryResponse:
 
         logger.info(f"Query processed successfully. Status: {result['status']}")
 
+        failed_stage = "response_generation"
         return QueryResponse(
             status=result["status"],
             message=result.get("message", ""),
@@ -66,7 +78,10 @@ async def query(req: QueryRequest) -> QueryResponse:
         )
 
     except Exception as e:
-        logger.error(f"Query processing failed: {e}", exc_info=True)
+        logger.error(
+            f"Query processing failed unexpectedly at stage '{failed_stage}': {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
