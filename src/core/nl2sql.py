@@ -30,7 +30,7 @@ SQL_PROMPTS = {
     "crypto": SQL_GENERATION_PROMPT_CRYPTO,
 }
 from src.core.sql_guard import guard_sql
-from src.exceptions import ClarificationNeeded, DatabaseError, SQLGenerationError
+from src.exceptions import ClarificationNeeded, DatabaseError, SQLGenerationError, SQLSafetyBlockedError
 from src.utils.db import get_db_engine
 from src.utils.llm import get_openai_client
 from src.utils.logger import get_logger
@@ -481,7 +481,7 @@ class SQLValidator:
 class SQLCorrector:
     """Corrects SQL based on validation issues"""
     
-    def correct(self, sql: str, question: str) -> str:
+    def correct(self, sql: str, question: str) -> tuple[str, bool]:
         """
         Attempt to correct SQL errors using LLM.
         
@@ -490,7 +490,7 @@ class SQLCorrector:
             question: Original question for context
             
         Returns:
-            Corrected SQL string
+            (corrected_or_original_sql, correction_failed)
         """
         try:
             client = get_openai_client()
@@ -520,8 +520,8 @@ Output ONLY the SQL, nothing else."""
             
             corrected = response.choices[0].message.content.strip()
             logger.info(f"SQL corrected - Original: {sql[:50]}... -> Corrected: {corrected[:50]}...")
-            return corrected
+            return corrected, False
             
         except Exception as e:
             logger.warning(f"SQL correction failed, using original: {e}")
-            return sql
+            return sql, True
