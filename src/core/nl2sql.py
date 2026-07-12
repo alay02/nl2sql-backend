@@ -330,9 +330,42 @@ def needs_clarification(question: str, product_type: str = "equities") -> Dict[s
 # ==================== Main Query Processing ====================
 
 
+def _failure(status: str, stage: str, exc: Exception, sql: str | None = None) -> Dict[str, Any]:
+    """
+    Build a standardized failure result tagged with the pipeline stage that
+    produced it, so callers (and eventually audit logging) can tell exactly
+    where a request failed instead of collapsing everything into one
+    generic "error" bucket.
+
+    Args:
+        status: "error" or "blocked"
+        stage: pipeline stage name, e.g. "sql_generation", "safety_validation",
+            "sql_execution"
+        exc: the caught exception
+        sql: the SQL string at the point of failure, if any
+
+    Returns:
+        Dict matching eval_one()'s failure return shape
+    """
+    logger.error(f"Query failed at {stage}: {exc}")
+    return {
+        "status": status,
+        "failed_stage": stage,
+        "error_type": type(exc).__name__,
+        "sql": sql,
+        "data": None,
+        "message": str(exc),
+    }
+
+
 def eval_one(question: str, product_type: str = "equities") -> Dict[str, Any]:
     """
     Process a question through the entire NL2SQL pipeline.
+
+    Each stage (sql_generation, safety_validation, sql_execution) is wrapped
+    in its own try/except so a failure result always carries a "failed_stage"
+    telling the caller exactly where the pipeline broke, instead of a single
+    catch-all that collapses every failure into one undifferentiated "error".
 
     Args:
         question: Natural language question from user
@@ -345,6 +378,8 @@ def eval_one(question: str, product_type: str = "equities") -> Dict[str, Any]:
         logger.warning("Received empty question")
         return {
             "status": "error",
+            "failed_stage": "input_validation",
+            "error_type": "EmptyQuestionError",
             "sql": None,
             "data": None,
             "message": "Question cannot be empty",
@@ -363,65 +398,80 @@ def eval_one(question: str, product_type: str = "equities") -> Dict[str, Any]:
             "message": "The question needs clarification to generate an accurate query.",
         }
 
+    # Stage: sql_generation
     try:
-        # Generate SQL using the product-specific prompt and schema
         raw_sql = generate_sql(question, product_type=product_type)
+    except SQLGenerationError as e:
+        return _failure("error", "sql_generation", e)
+
+    # Stage: safety_validation
+    try:
         sql = secure_sql(raw_sql)
-        
-        # 1.2 Optimization: Validate and correct SQL
+    except SQLSafetyBlockedError as e:
+        return _failure("blocked", "safety_validation", e)
+    except SQLGenerationError as e:
+        return _failure("error", "sql_generation", e)
+
+    # Stage: validation / correction
+    try:
         validator = SQLValidator()
         validation_result = validator.validate(sql)
-        
+
         if not validation_result["valid"] and len(validation_result["issues"]) > 0:
             logger.info(f"SQL validation issues found: {validation_result['issues']}")
             corrector = SQLCorrector()
-            sql = corrector.correct(sql, question)
-            sql = secure_sql(sql)  # Re-secure after correction
-            logger.info(f"SQL corrected using LLM")
-        
-        # Execute query
+            corrected_sql, correction_failed = corrector.correct(sql, question)
+
+            if correction_failed:
+                logger.warning("SQL correction failed, proceeding with original SQL")
+            else:
+                sql = secure_sql(corrected_sql)  # Re-secure after correction
+                logger.info("SQL corrected using LLM")
+    except SQLSafetyBlockedError as e:
+        return _failure("blocked", "safety_validation", e)
+    except SQLGenerationError as e:
+        return _failure("error", "sql_generation", e)
+
+    # Stage: sql_execution
+    try:
         data = run_sql(sql)
-        
-        # Check if data is empty
-        if len(data["rows"]) == 0:
-            logger.info("Query returned no rows")
-            return {
-                "status": "no_data",
-                "sql": sql,
-                "data": data,
-                "message": "No data found for the given query conditions.",
-            }
-        
-        # Check if all values are None
-        if all(all(v is None for v in row) for row in data["rows"]):
-            logger.info("Query returned only NULL values")
-            return {
-                "status": "no_data",
-                "sql": sql,
-                "data": data,
-                "message": "Query executed but returned no valid values.",
-            }
-        
-        logger.info("Query successful")
+    except DatabaseError as e:
+        return _failure("error", "sql_execution", e, sql=sql)
+
+    # Check if data is empty
+    if len(data["rows"]) == 0:
+        logger.info("Query returned no rows")
         return {
-            "status": "ok",
+            "status": "no_data",
+            "failed_stage": None,
             "sql": sql,
             "data": data,
-            "message": "",
-            "meta": {
-                "has_limit": "limit" in sql.lower(),
-                "uses_now": "now(" in sql.lower(),
-            },
+            "message": "No data found for the given query conditions.",
         }
-    
-    except Exception as e:
-        logger.error(f"Query processing failed: {e}")
+
+    # Check if all values are None
+    if all(all(v is None for v in row) for row in data["rows"]):
+        logger.info("Query returned only NULL values")
         return {
-            "status": "error",
-            "sql": None,
-            "data": None,
-            "message": str(e),
+            "status": "no_data",
+            "failed_stage": None,
+            "sql": sql,
+            "data": data,
+            "message": "Query executed but returned no valid values.",
         }
+
+    logger.info("Query successful")
+    return {
+        "status": "ok",
+        "failed_stage": None,
+        "sql": sql,
+        "data": data,
+        "message": "",
+        "meta": {
+            "has_limit": "limit" in sql.lower(),
+            "uses_now": "now(" in sql.lower(),
+        },
+    }
 
 
 class SQLValidator:
