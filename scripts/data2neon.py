@@ -27,7 +27,7 @@ for fp in files:
 
 big = pd.concat(all_df, ignore_index=True)
 
-# Load into staging_market_data (overwrite/append as needed)
-big.to_sql("staging_market_data", engine, if_exists="append", index=False, method="multi", chunksize=5000)
+# Load into staging_stock_data (overwrite/append as needed)
+big.to_sql("staging_stock_data", engine, if_exists="append", index=False, method="multi", chunksize=5000)
 
 print("Loaded rows:", len(big))

@@ -60,7 +60,7 @@ def test_safety_checks_structure():
     # Test with valid SQL
     result = build_safety_checks(
         question="What is the average price of NVDA?",
-        sql="SELECT AVG(close) FROM market_data WHERE ticker = 'NVDA'",
+        sql="SELECT AVG(close) FROM stock_data WHERE ticker = 'NVDA'",
         status="ok",
         message="",
     )

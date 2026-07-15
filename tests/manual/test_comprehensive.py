@@ -53,9 +53,9 @@ def test_2_sql_validation():
     
     validator = SQLValidator()
     test_cases = [
-        ("Bad SQL - Missing GROUP BY", "SELECT ticker, AVG(close) FROM market_data WHERE ticker='NVDA'"),
-        ("Bad SQL - Using NOW()", "SELECT close FROM market_data WHERE timestamp > NOW() - interval '30 days'"),
-        ("Good SQL", "SELECT ticker, AVG(close) FROM market_data WHERE ticker='NVDA' GROUP BY ticker LIMIT 10"),
+        ("Bad SQL - Missing GROUP BY", "SELECT ticker, AVG(close) FROM stock_data WHERE ticker='NVDA'"),
+        ("Bad SQL - Using NOW()", "SELECT close FROM stock_data WHERE timestamp > NOW() - interval '30 days'"),
+        ("Good SQL", "SELECT ticker, AVG(close) FROM stock_data WHERE ticker='NVDA' GROUP BY ticker LIMIT 10"),
     ]
     
     for test_name, sql in test_cases:
@@ -126,7 +126,7 @@ def demo_frontend_output_format():
         # For now, show the expected output format
         demo_output = {
             "status": "ok",
-            "sql": "SELECT AVG(close) FROM market_data WHERE ticker='AAPL' AND timestamp >= (SELECT MAX(timestamp)-'30 days'::interval FROM market_data WHERE ticker='AAPL');",
+            "sql": "SELECT AVG(close) FROM stock_data WHERE ticker='AAPL' AND timestamp >= (SELECT MAX(timestamp)-'30 days'::interval FROM stock_data WHERE ticker='AAPL');",
             "data": {
                 "columns": ["avg_close"],
                 "rows": [[176.45]]
@@ -169,7 +169,7 @@ def demo_error_handling():
     print("\n2️⃣  NO DATA FOUND (status='no_data'):")
     no_data_response = {
         "status": "no_data",
-        "sql": "SELECT * FROM market_data WHERE ticker='INVALID' AND timestamp > '2026-01-01'",
+        "sql": "SELECT * FROM stock_data WHERE ticker='INVALID' AND timestamp > '2026-01-01'",
         "data": {"columns": [], "rows": []},
         "message": "No data found for the given query conditions.",
         "final_answer": "Sorry, I couldn't find any data matching your query criteria."
@@ -201,9 +201,9 @@ SELECT ticker,
        MAX(close) as max_price,
        MIN(close) as min_price,
        SUM(volume) as total_volume
-FROM market_data 
+FROM stock_data 
 WHERE ticker IN ('AAPL', 'NVDA') 
-  AND timestamp >= (SELECT MAX(timestamp)-'30 days'::interval FROM market_data)
+  AND timestamp >= (SELECT MAX(timestamp)-'30 days'::interval FROM stock_data)
 GROUP BY ticker
 ORDER BY avg_price DESC;
         """.strip(),

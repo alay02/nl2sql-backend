@@ -96,11 +96,11 @@ class TestTimeWindowSafetyCheck:
     def test_metadata_is_not_treated_as_meta_ticker(self):
         # "metadata" must not match the META ticker, so a query without a real
         # ticker should not be failed for lacking MAX("timestamp").
-        sql = "SELECT AVG(close) FROM market_data LIMIT 5;"
+        sql = "SELECT AVG(close) FROM stock_data LIMIT 5;"
         assert check_time_window_correct("show the metadata average recently", sql) is True
 
     def test_real_ticker_without_max_timestamp_fails(self):
         # A real ticker with a time reference but no MAX("timestamp") anchor
         # should still be flagged as incorrect time windowing.
-        sql = "SELECT close FROM market_data WHERE ticker='NVDA' LIMIT 5;"
+        sql = "SELECT close FROM stock_data WHERE ticker='NVDA' LIMIT 5;"
         assert check_time_window_correct("NVDA price last week", sql) is False

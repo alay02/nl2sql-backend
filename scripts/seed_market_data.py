@@ -1,4 +1,4 @@
-"""Seed market_data table with realistic synthetic data for all supported tickers."""
+"""Seed stock_data table with realistic synthetic data for all supported tickers."""
 import os
 import numpy as np
 import pandas as pd
@@ -27,7 +27,7 @@ engine = create_engine(DATABASE_URL)
 
 with engine.connect() as conn:
     conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS market_data (
+        CREATE TABLE IF NOT EXISTS stock_data (
             ticker TEXT NOT NULL,
             "timestamp" TIMESTAMPTZ NOT NULL,
             open DOUBLE PRECISION,
@@ -37,7 +37,7 @@ with engine.connect() as conn:
             volume BIGINT
         )
     """))
-    conn.execute(text("DELETE FROM market_data"))
+    conn.execute(text("DELETE FROM stock_data"))
     conn.commit()
 
 dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=DAYS)
@@ -67,5 +67,5 @@ for ticker, base_price in TICKERS.items():
         })
 
 df = pd.DataFrame(all_rows)
-df.to_sql("market_data", engine, if_exists="append", index=False, method="multi", chunksize=5000)
+df.to_sql("stock_data", engine, if_exists="append", index=False, method="multi", chunksize=5000)
 print(f"Loaded {len(df)} rows ({len(TICKERS)} tickers × {DAYS} days)")

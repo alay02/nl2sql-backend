@@ -68,7 +68,7 @@ class QueryResponse(BaseModel):
             "example": {
                 "status": "ok",
                 "final_answer": "The average closing price of NVDA is $100.23",
-                "sql": "SELECT AVG(close) FROM market_data WHERE ticker = 'NVDA'",
+                "sql": "SELECT AVG(close) FROM stock_data WHERE ticker = 'NVDA'",
                 "data": {
                     "columns": ["avg"],
                     "rows": [[100.23]],

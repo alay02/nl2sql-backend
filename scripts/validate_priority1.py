@@ -19,7 +19,7 @@ def test_validator():
     validator = SQLValidator()
     
     # Test case 1: Aggregation without GROUP BY
-    bad_sql = "SELECT ticker, AVG(close) FROM market_data WHERE ticker='NVDA'"
+    bad_sql = "SELECT ticker, AVG(close) FROM stock_data WHERE ticker='NVDA'"
     result1 = validator.validate(bad_sql)
     print(f"\nTest 1a - Missing GROUP BY:")
     print(f"  SQL: {bad_sql}")
@@ -27,7 +27,7 @@ def test_validator():
     print(f"  Issues: {result1['issues']}")
     
     # Test case 2: Using NOW()
-    bad_sql2 = "SELECT close FROM market_data WHERE timestamp > NOW() - interval '30 days'"
+    bad_sql2 = "SELECT close FROM stock_data WHERE timestamp > NOW() - interval '30 days'"
     result2 = validator.validate(bad_sql2)
     print(f"\nTest 1b - Using NOW():")
     print(f"  SQL: {bad_sql2}")
@@ -35,7 +35,7 @@ def test_validator():
     print(f"  Issues: {result2['issues']}")
     
     # Test case 3: Good SQL
-    good_sql = "SELECT ticker, AVG(close) FROM market_data WHERE ticker='NVDA' GROUP BY ticker LIMIT 10"
+    good_sql = "SELECT ticker, AVG(close) FROM stock_data WHERE ticker='NVDA' GROUP BY ticker LIMIT 10"
     result3 = validator.validate(good_sql)
     print(f"\nTest 1c - Good SQL (with GROUP BY):")
     print(f"  SQL: {good_sql}")
