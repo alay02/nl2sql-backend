@@ -87,6 +87,19 @@ SUPPORTED_ETF_TICKERS = ["voo", "qqq", "iwm", "xlf", "xlk", "gld", "tlt", "vti",
 SUPPORTED_OPTION_UNDERLYINGS = ["nvda", "aapl", "tsla", "msft", "amzn"]
 SUPPORTED_CRYPTO_TICKERS = ["btc", "eth", "bnb", "sol", "xrp", "doge"]
 
+# ==================== Product Type Detection ====================
+# Keywords → product type (strong signal, weight 3)
+PRODUCT_KEYWORDS = {
+    "options": ["option", "options", "call", "calls", "put", "puts", "strike",
+                "expiration", "expiry", "greeks", "delta", "gamma", "theta",
+                "vega", "implied volatility", "iv", "open interest",
+                "contracts", "chain", "straddle", "strangle", "spread"],
+    "etfs": ["etf", "etfs", "nav", "expense ratio", "aum", "fund", "funds",
+             "net asset value", "assets under management"],
+    "crypto": ["crypto", "cryptocurrency", "bitcoin", "ethereum", "blockchain",
+               "defi", "token", "tokens", "coin", "coins"],
+}
+
 # ==================== Clarification Keywords ====================
 AMBIGUOUS_KEYWORDS = [
     "recent",
@@ -584,10 +597,20 @@ Example 12:
   Q: "What is the volatility of TLT over the last 30 days?"
   SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM etf_data WHERE ticker = 'TLT'), daily AS (SELECT "timestamp", close, LAG(close) OVER (ORDER BY "timestamp") AS prev_close FROM etf_data WHERE ticker = 'TLT') SELECT ROUND(STDDEV((close - prev_close) / prev_close)::numeric, 6) AS daily_return_volatility FROM daily WHERE prev_close IS NOT NULL AND "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '30 days';
 
+--- PERFORMANCE RANKING ---
+Example 13:
+  Q: "Which ETF is the top performer?"
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM etf_data), latest AS (SELECT ticker, close, LAG(close) OVER (PARTITION BY ticker ORDER BY "timestamp") AS prev_close, "timestamp" FROM etf_data WHERE "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '1 day') SELECT ticker, ROUND(((close - prev_close) / prev_close * 100)::numeric, 4) AS daily_return_pct FROM latest WHERE prev_close IS NOT NULL AND "timestamp" = (SELECT max_ts FROM anchor) ORDER BY daily_return_pct DESC LIMIT 1;
+
+Example 14:
+  Q: "Rank all ETFs by performance over the last 30 days."
+  SQL: WITH anchor AS (SELECT MAX("timestamp") AS max_ts FROM etf_data), firsts AS (SELECT DISTINCT ON (ticker) ticker, close AS first_close FROM etf_data WHERE "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '30 days' ORDER BY ticker, "timestamp" ASC), lasts AS (SELECT DISTINCT ON (ticker) ticker, close AS last_close FROM etf_data WHERE "timestamp" >= (SELECT max_ts FROM anchor) - INTERVAL '30 days' ORDER BY ticker, "timestamp" DESC) SELECT f.ticker, ROUND(((l.last_close - f.first_close) / f.first_close * 100)::numeric, 4) AS return_pct FROM firsts f JOIN lasts l ON f.ticker = l.ticker ORDER BY return_pct DESC;
+
 BAD EXAMPLES (patterns to AVOID):
 - NEVER use NOW() — always use MAX("timestamp") for time anchoring.
 - NEVER query from stock_data — ETF data is in etf_data.
 - NEVER omit LIMIT on non-aggregation SELECT queries.
+- NEVER put window functions (LAG, LEAD, ROW_NUMBER, etc.) in WHERE — compute them in a CTE first, then filter.
 
 Schema:
 {schema}

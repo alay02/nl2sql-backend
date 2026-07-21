@@ -1,6 +1,8 @@
 """SQL generation, validation, and execution"""
+from __future__ import annotations
+
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from src.config import settings
 from src.constants import (
@@ -16,6 +18,7 @@ from src.constants import (
     SUPPORTED_ETF_TICKERS,
     SUPPORTED_OPTION_UNDERLYINGS,
     SUPPORTED_CRYPTO_TICKERS,
+    PRODUCT_KEYWORDS,
     TIME_INDICATORS,
     AMBIGUOUS_KEYWORDS,
     COMPARISON_INDICATORS,
@@ -36,6 +39,81 @@ from src.utils.llm import get_openai_client
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+KEYWORD_WEIGHT = 3
+TICKER_WEIGHT = 1
+
+# Table name → product type, and which column holds the ticker.
+_TABLE_PRODUCT_MAP = {
+    "stock_data": ("equities", "ticker"),
+    "etf_data": ("etfs", "ticker"),
+    "options_data": ("options", "underlying_ticker"),
+    "crypto_data": ("crypto", "ticker"),
+}
+
+_ticker_product_map: Optional[dict] = None
+
+
+def _load_ticker_product_map() -> dict:
+    """Query each table for its distinct tickers and build a map of
+    lowercase ticker → list of product types. Runs once, cached."""
+    global _ticker_product_map
+    if _ticker_product_map is not None:
+        return _ticker_product_map
+
+    from sqlalchemy import text
+    engine = get_db_engine()
+    result = {}
+
+    with engine.connect() as conn:
+        for table, (product, col) in _TABLE_PRODUCT_MAP.items():
+            try:
+                rows = conn.execute(text(f'SELECT DISTINCT {col} FROM {table}'))
+                for row in rows:
+                    ticker = row[0].lower()
+                    result.setdefault(ticker, []).append(product)
+            except Exception:
+                logger.debug(f"Table {table} not available, skipping")
+
+    _ticker_product_map = result
+    logger.info(f"Loaded ticker map: {len(result)} tickers across {len(_TABLE_PRODUCT_MAP)} tables")
+    return _ticker_product_map
+
+
+def detect_product_type(question: str) -> str:
+    """
+    Single-pass scan of the question to determine which product type
+    (equities, etfs, options, crypto) the user is asking about.
+
+    Scores each product type by matching words against DB tickers
+    (weak signal) and domain keywords (strong signal). Highest score wins;
+    ties or no matches default to equities.
+    """
+    ticker_map = _load_ticker_product_map()
+    scores = {"equities": 0, "etfs": 0, "options": 0, "crypto": 0}
+    q = question.lower()
+
+    for product, keywords in PRODUCT_KEYWORDS.items():
+        for kw in keywords:
+            if " " in kw and kw in q:
+                scores[product] += KEYWORD_WEIGHT
+
+    for word in re.split(r'\W+', q):
+        if not word:
+            continue
+        for product, keywords in PRODUCT_KEYWORDS.items():
+            if word in keywords:
+                scores[product] += KEYWORD_WEIGHT
+        if word in ticker_map:
+            for product in ticker_map[word]:
+                scores[product] += TICKER_WEIGHT
+
+    best = max(scores, key=scores.get)
+    if scores[best] == 0:
+        return "equities"
+
+    logger.info(f"Auto-detected product type: {best} (scores: {scores})")
+    return best
 
 
 def generate_sql(question: str, product_type: str = "equities") -> str:
@@ -386,6 +464,10 @@ def eval_one(question: str, product_type: str = "equities") -> Dict[str, Any]:
         }
 
     question = question.strip()
+
+    if product_type == "auto":
+        product_type = detect_product_type(question)
+
     logger.info(f"Processing question ({product_type}): {question}")
 
     # Check if clarification is needed first
@@ -470,6 +552,7 @@ def eval_one(question: str, product_type: str = "equities") -> Dict[str, Any]:
         "meta": {
             "has_limit": "limit" in sql.lower(),
             "uses_now": "now(" in sql.lower(),
+            "product_type": product_type,
         },
     }
 

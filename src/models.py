@@ -16,15 +16,17 @@ class StatusEnum(str, Enum):
 
 class ProductTypeEnum(str, Enum):
     """Supported product types"""
+    AUTO = "auto"
     EQUITIES = "equities"
     ETFS = "etfs"
     OPTIONS = "options"
+    CRYPTO = "crypto"
 
 
 class QueryRequest(BaseModel):
     """API request model"""
     question: str = Field(..., min_length=1, max_length=500)
-    product_type: ProductTypeEnum = Field(default=ProductTypeEnum.EQUITIES)
+    product_type: ProductTypeEnum = Field(default=ProductTypeEnum.AUTO)
 
 
 class SqlGenerationChecks(BaseModel):
